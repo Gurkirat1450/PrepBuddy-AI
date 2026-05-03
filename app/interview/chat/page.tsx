@@ -219,7 +219,7 @@ export default function ChatPage() {
           body: JSON.stringify({
             domain,
             tech,
-            track,
+            previous: askedQuestions,
           }),
         });
 
@@ -234,6 +234,8 @@ export default function ChatPage() {
           content: nextQuestion,
         },
       ]);
+
+      setAskedQuestions((prev) => [...prev, data.question]);
 
       if (mode === "voice" || mode === "video") {
         speakText(nextQuestion);

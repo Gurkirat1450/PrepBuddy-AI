@@ -1,0 +1,12 @@
+[
+  "How do you see CDS (Common Data Service) uniquely benefiting public sector organizations, particularly concerning data sharing and inter-agency collaboration and preventing data siloing?",
+  "Describe a typical architectural pattern for implementing CDS within a complex government IT ecosystem, considering both cloud and on-premise integrations and existing legacy systems.",
+  "Given the sensitive nature of government data, what strategies would you implement to ensure data security, privacy, and compliance with public sector regulations (e.g., FOIA, GDPR-equivalents) when using CDS?",
+  "How would you approach data modeling within CDS for a government service that needs to integrate data from multiple legacy systems, each with its own data standards and definitions?",
+  "Can you describe a significant challenge you faced while implementing or managing CDS in a public sector project, focusing on data quality or integration, and how you overcame it?",
+  "Government agencies often deal with large volumes of transactional and historical data. What considerations would you prioritize to ensure optimal performance and scalability of a CDS environment in such a scenario?",
+  "How would you manage stakeholder expectations and drive user adoption of a new CDS-based data platform across various government departments with differing priorities and technical literacy levels?",
+  "What methodology would you recommend for migrating critical government data from existing relational databases or legacy systems into CDS, while minimizing disruption to ongoing public services?",
+  "How can CDS be leveraged to improve data analytics and reporting capabilities for government decision-makers, and what are the key steps to setting this up effectively for policy formulation?",
+  "Beyond initial implementation, what are the key considerations for the ongoing maintenance, governance, and lifecycle management of a CDS solution in a government context, including versioning and updates?"
+]

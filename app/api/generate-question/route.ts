@@ -1,73 +1,74 @@
 import { NextResponse } from "next/server";
-import { questionBank } from "@/data/questions";
+import { getInterviewQuestions } from "@/lib/questionLoader";
 
 export async function POST(req: Request) {
-  const {
-    domain = "frontend",
-    type = "technical",
-    previous = [],
-  } = await req.json();
+  try {
+    const { domain = "web", tech = "react", previous = [] } = await req.json();
 
-  const baseQuestions = questionBank[domain]?.[type] || [
-    "Tell me about yourself",
-  ];
+    // 📦 Load from JSON question bank
+    const questions = getInterviewQuestions(domain, tech);
 
-  // 🚫 Remove already asked
-  const filtered = baseQuestions.filter((q: string) => !previous.includes(q));
+    if (!questions.length) {
+      return NextResponse.json({
+        question: "Tell me about yourself",
+      });
+    }
 
-  const base =
-    filtered.length > 0
-      ? filtered[Math.floor(Math.random() * filtered.length)]
-      : baseQuestions[Math.floor(Math.random() * baseQuestions.length)];
+    // 🚫 Remove already asked questions
+    const filtered = questions.filter((q: string) => !previous.includes(q));
 
-  // 🤖 Gemini call
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
+    const base =
+      filtered.length > 0
+        ? filtered[Math.floor(Math.random() * filtered.length)]
+        : questions[Math.floor(Math.random() * questions.length)];
+
+    // 🤖 Improve with Gemini
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `
+You are a professional interviewer.
+
+Given this interview question:
+"${base}"
+
+Rewrite it slightly to sound natural and conversational.
+
+Rules:
+- Return ONLY one question
+- No explanation
+- No formatting
+- Keep it short and realistic
+- Do NOT repeat the exact same wording
+                  `,
+                },
+              ],
+            },
+          ],
+        }),
       },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `
-                You are a professional interviewer.
+    );
 
-                Given this real interview question:
+    const data = await response.json();
 
-                "${base}"
+    const question =
+      data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || base;
 
-                Generate ONLY ONE improved interview question that tests the same concept.
+    return NextResponse.json({ question });
+  } catch (error) {
+    console.error("Question API error:", error);
 
-                Rules:
-                - Return only the final interview question
-                - No explanation
-                - No multiple options
-                - No markdown
-                - No bullet points
-                - Keep it short and realistic
-                - Sound like a real interviewer
-
-                Example good output:
-                How does React's Virtual DOM improve rendering performance?
-
-                Example bad output:
-                Here are 3 possible ways to ask...
-                `,
-              },
-            ],
-          },
-        ],
-      }),
-    },
-  );
-
-  const data = await response.json();
-
-  const question = data?.candidates?.[0]?.content?.parts?.[0]?.text || base;
-
-  return NextResponse.json({ question });
+    return NextResponse.json({
+      question: "Tell me about your recent experience.",
+    });
+  }
 }

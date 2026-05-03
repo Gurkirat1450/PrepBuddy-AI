@@ -5,59 +5,53 @@ export async function POST(req: Request) {
     const { question, answer, domain, type } = await req.json();
 
     const prompt = `
-You are a strict professional interviewer.
+    You are a real professional interviewer having a live conversation.
 
-Question:
-${question}
+    Question:
+    ${question}
 
-Candidate Answer:
-${answer}
+    Candidate Answer:
+    ${answer}
 
-Evaluate this answer and return ONLY valid JSON.
+    Your job:
+    - Evaluate the answer deeply
+    - Respond like a human interviewer (NOT a report)
+    - Help the candidate improve in real-time
 
-Do NOT explain anything.
-Do NOT use markdown.
-Do NOT add text before or after JSON.
+    IMPORTANT RULES:
+    - DO NOT give scores
+    - DO NOT use headings like "feedback" or "strengths"
+    - DO NOT repeat generic phrases
+    - Be specific to THIS answer
+    - Sound natural and conversational
+    - If answer is weak → guide improvement
+    - If answer is good → go deeper
+    - Keep response 2–4 lines max
 
-Return ONLY valid JSON in this format:
+    Also generate a natural follow-up question.
 
-{
-  "score": number between 1 and 10,
-  "confidenceScore": number between 1 and 10,
-  "feedback": "Short professional feedback",
-  "strengths": [
-    "Short point 1",
-    "Short point 2"
-  ],
-  "improvements": [
-    "Short point 1",
-    "Short point 2"
-  ],
-  "speakingAnalysis": [
-    "Short speaking point 1",
-    "Short speaking point 2"
-  ]
-}
+    Return ONLY valid JSON:
 
-Rules:
-- confidenceScore should reflect speaking confidence
-- consider clarity, structure, hesitation, and filler words
-- feedback should be short
-- strengths should be short
-- improvements should be short
-- speakingAnalysis should be short
-- realistic interviewer tone only
-- no markdown
-- no explanation outside JSON
-- feedback must be specific to the candidate answer
-- do not repeat same feedback for every answer
-- evaluate based on actual content quality
+    {
+      "response": "Conversational feedback like a real interviewer",
+      "followUp": "Next relevant interview question",
+      "confidenceScore": number between 1 and 10,
+      "decision": "continue | retry | switch"
+    }
 
-IMPORTANT:
-Return dynamic feedback based on the actual answer.
-Do NOT repeat generic responses.
-Evaluate the real quality of the answer.
-`;
+    Decision rules:
+    - continue → if answer is decent or good
+    - retry → if answer is weak but improvable
+    - switch → if candidate is stuck or silent
+
+    confidenceScore:
+    - based on clarity, hesitation, fluency, structure
+
+    IMPORTANT:
+    - Make response dynamic and specific
+    - DO NOT repeat previous responses
+    - DO NOT generate generic feedback
+    `;
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
