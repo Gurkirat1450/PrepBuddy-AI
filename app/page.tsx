@@ -24,7 +24,7 @@ export default function Home() {
         >
           <h2 className="text-xl font-semibold mb-2">🎤 Interview Prep</h2>
           <p className="text-gray-400">
-            Practice real interview questions with AI feedback.
+            Practice real interview questions in a live AI conversation.
           </p>
         </div>
 

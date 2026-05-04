@@ -1,54 +1,82 @@
 import { NextResponse } from "next/server";
 import { getInterviewQuestions } from "@/lib/questionLoader";
 
+const FALLBACK_QUESTIONS = [
+  "Tell me about yourself.",
+  "Walk me through a recent project you worked on.",
+  "What was a technical challenge you solved recently?",
+  "How do you approach debugging a difficult issue?",
+  "What would you improve in one of your recent projects?",
+];
+
+function normalizeQuestion(question: string) {
+  return question.trim().toLowerCase();
+}
+
 export async function POST(req: Request) {
   try {
-    const { domain = "web", tech = "react", previous = [] } = await req.json();
+    const { domain, tech, previous: previousQuestions = [] } = await req.json();
 
-    // 📦 Load from JSON question bank
     const questions = getInterviewQuestions(domain, tech);
 
-    if (!questions.length) {
-      return NextResponse.json({
-        question: "Tell me about yourself",
-      });
-    }
+    const askedQuestionSet = new Set(
+      (Array.isArray(previousQuestions) ? previousQuestions : [])
+        .filter((q): q is string => typeof q === "string")
+        .map(normalizeQuestion),
+    );
 
-    // 🚫 Remove already asked questions
-    const filtered = questions.filter((q: string) => !previous.includes(q));
+    const questionBank = questions.length > 0 ? questions : FALLBACK_QUESTIONS;
 
-    const base =
-      filtered.length > 0
-        ? filtered[Math.floor(Math.random() * filtered.length)]
-        : questions[Math.floor(Math.random() * questions.length)];
+    const introQuestions = ["Tell me about yourself", "Introduce yourself"];
 
-    // 🤖 Improve with Gemini
+    const filteredQuestionBank = questionBank.filter(
+      (q) => !introQuestions.includes(normalizeQuestion(q)),
+    );
+
+    const filtered = filteredQuestionBank.filter(
+      (q) => !askedQuestionSet.has(normalizeQuestion(q)),
+    );
+
+    const basePool = filtered.length > 0 ? filtered : questionBank;
+
+    const shuffled = basePool.sort(() => Math.random() - 0.5);
+
+    const base = shuffled[0];
+
+    // 🔥 Gemini prompt FIXED (NO REPETITION)
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [
             {
               parts: [
                 {
                   text: `
-You are a professional interviewer.
+                  You are a professional interviewer.
 
-Given this interview question:
-"${base}"
+                  Given this base question:
+                  "${base}"
 
-Rewrite it slightly to sound natural and conversational.
+                  Generate a DIFFERENT interview question.
 
-Rules:
-- Return ONLY one question
-- No explanation
-- No formatting
-- Keep it short and realistic
-- Do NOT repeat the exact same wording
+                  STRICT RULES:
+                  - Do NOT repeat the same question
+                  - Do NOT rephrase the same wording
+                  - Ask a different angle or concept
+                  - Keep it natural and realistic
+                  - Return ONLY one question
+
+                  Examples:
+                  Instead of repeating:
+                  "What was the hardest part?"
+
+                  Ask:
+                  - "What trade-offs did you consider?"
+                  - "How did you validate your approach?"
+                  - "What would you improve next time?"
                   `,
                 },
               ],
@@ -63,12 +91,18 @@ Rules:
     const question =
       data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || base;
 
-    return NextResponse.json({ question });
+    return NextResponse.json({
+      question,
+      sourceQuestion: base,
+      reused: filtered.length === 0,
+    });
   } catch (error) {
     console.error("Question API error:", error);
 
     return NextResponse.json({
       question: "Tell me about your recent experience.",
+      sourceQuestion: "Tell me about your recent experience.",
+      reused: false,
     });
   }
 }

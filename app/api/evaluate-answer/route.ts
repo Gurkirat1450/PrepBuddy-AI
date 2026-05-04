@@ -1,11 +1,107 @@
 import { NextResponse } from "next/server";
 
+type EvaluationDecision = "continue" | "retry" | "switch";
+
+type ConversationalEvaluation = {
+  response: string;
+  followUp: string;
+  confidenceScore: number;
+  decision: EvaluationDecision;
+};
+
+const VALID_DECISIONS: EvaluationDecision[] = ["continue", "retry", "switch"];
+
+function clampConfidenceScore(value: unknown, fallback: number) {
+  const numericScore =
+    typeof value === "number" && Number.isFinite(value) ? value : fallback;
+
+  return Math.min(10, Math.max(1, Math.round(numericScore)));
+}
+
+function getFallbackDecision(answer: string): EvaluationDecision {
+  const trimmedAnswer = answer.trim();
+
+  if (!trimmedAnswer || trimmedAnswer.length < 15) {
+    return "switch";
+  }
+
+  if (trimmedAnswer.length < 80) {
+    return "retry";
+  }
+
+  return "continue";
+}
+
+function buildFallbackEvaluation(
+  answer: string,
+  fillerCount: number,
+): ConversationalEvaluation {
+  const decision = getFallbackDecision(answer);
+
+  if (decision === "switch") {
+    return {
+      response:
+        "That's okay, it sounds like you may need a moment on this one. Let's move to a nearby question and keep the conversation flowing.",
+      followUp: "Can you walk me through a related example you know well?",
+      confidenceScore: clampConfidenceScore(10 - fillerCount, 4),
+      decision,
+    };
+  }
+
+  if (decision === "retry") {
+    return {
+      response:
+        "You have the start of an answer, but it needs a clearer example and a stronger ending. Try framing it as situation, action, and result.",
+      followUp: "Can you answer that again with one concrete example?",
+      confidenceScore: clampConfidenceScore(10 - fillerCount, 6),
+      decision,
+    };
+  }
+
+  return {
+    response:
+      "That answer is clear enough to build on, especially if you add one measurable outcome. I would like to hear a bit more about your specific contribution.",
+    followUp:
+      "What was the hardest part of that work, and how did you handle it?",
+    confidenceScore: clampConfidenceScore(10 - fillerCount, 7),
+    decision,
+  };
+}
+
+function normalizeEvaluation(
+  parsed: Record<string, unknown>,
+  fallback: ConversationalEvaluation,
+): ConversationalEvaluation {
+  const decision = VALID_DECISIONS.includes(
+    parsed.decision as EvaluationDecision,
+  )
+    ? (parsed.decision as EvaluationDecision)
+    : fallback.decision;
+
+  return {
+    response:
+      typeof parsed.response === "string" && parsed.response.trim()
+        ? parsed.response.trim()
+        : fallback.response,
+    followUp:
+      typeof parsed.followUp === "string" && parsed.followUp.trim()
+        ? parsed.followUp.trim()
+        : fallback.followUp,
+    confidenceScore: clampConfidenceScore(
+      parsed.confidenceScore,
+      fallback.confidenceScore,
+    ),
+    decision,
+  };
+}
+
 export async function POST(req: Request) {
   try {
     const { question, answer, domain, type } = await req.json();
+    const candidateAnswer = typeof answer === "string" ? answer : "";
 
     const prompt = `
-    You are a real professional interviewer having a live conversation.
+    You are a real interviewer conducting a conversation.
 
     Question:
     ${question}
@@ -13,44 +109,52 @@ export async function POST(req: Request) {
     Candidate Answer:
     ${answer}
 
-    Your job:
-    - Evaluate the answer deeply
-    - Respond like a human interviewer (NOT a report)
-    - Help the candidate improve in real-time
+    IMPORTANT:
+    - The candidate has already answered previous questions.
+    - NEVER repeat a previous question.
+    - NEVER go back to earlier questions like "hardest part".
 
-    IMPORTANT RULES:
-    - DO NOT give scores
-    - DO NOT use headings like "feedback" or "strengths"
-    - DO NOT repeat generic phrases
-    - Be specific to THIS answer
-    - Sound natural and conversational
-    - If answer is weak → guide improvement
-    - If answer is good → go deeper
-    - Keep response 2–4 lines max
+    Your task:
+    1. Give short, specific feedback (2–3 lines)
+    2. Ask a NEW follow-up question
 
-    Also generate a natural follow-up question.
+    NEVER ask:
+    "What was the hardest part of that work"
 
-    Return ONLY valid JSON:
+    NEVER reuse any previously asked question.
+
+    If unsure, ask about:
+    - performance evaluation
+    - trade-offs
+    - improvements
+    - edge cases
+    - scalability
+
+    Each follow-up MUST be different from all previous questions.
+
+    STRICT RULES:
+    - Do NOT repeat or rephrase previous questions
+    - Each follow-up must explore a NEW angle
+    - Always go deeper or move forward
+
+    GOOD follow-ups:
+    - "How did you evaluate your model performance?"
+    - "What limitations did your approach have?"
+    - "What would you improve next time?"
+    - "How did you handle edge cases?"
+
+    BAD follow-ups:
+    - repeating "What was the hardest part"
+    - reusing earlier questions
+
+    Return ONLY JSON:
 
     {
-      "response": "Conversational feedback like a real interviewer",
-      "followUp": "Next relevant interview question",
-      "confidenceScore": number between 1 and 10,
-      "decision": "continue | retry | switch"
+      "response": "short feedback",
+      "followUp": "new unique question",
+      "confidenceScore": number,
+      "decision": "continue"
     }
-
-    Decision rules:
-    - continue → if answer is decent or good
-    - retry → if answer is weak but improvable
-    - switch → if candidate is stuck or silent
-
-    confidenceScore:
-    - based on clarity, hesitation, fluency, structure
-
-    IMPORTANT:
-    - Make response dynamic and specific
-    - DO NOT repeat previous responses
-    - DO NOT generate generic feedback
     `;
 
     const response = await fetch(
@@ -109,7 +213,7 @@ export async function POST(req: Request) {
       "you know",
     ];
 
-    const lowerAnswer = answer.toLowerCase();
+    const lowerAnswer = candidateAnswer.toLowerCase();
 
     const fillerCount = fillerWords.reduce((count, word) => {
       const matches = lowerAnswer.match(new RegExp(`\\b${word}\\b`, "g"));
@@ -117,78 +221,34 @@ export async function POST(req: Request) {
       return count + (matches ? matches.length : 0);
     }, 0);
 
+    const fallbackEvaluation = buildFallbackEvaluation(
+      candidateAnswer,
+      fillerCount,
+    );
+
     if (match) {
       try {
         const parsed = JSON.parse(match[0]);
 
-        return NextResponse.json({
-          score: parsed.score || 6,
-
-          confidenceScore:
-            parsed.confidenceScore || Math.max(5, 10 - fillerCount),
-
-          feedback:
-            parsed.feedback ||
-            "Good attempt, but stronger structure is needed.",
-
-          strengths: parsed.strengths || [],
-
-          improvements: parsed.improvements || [],
-
-          speakingAnalysis: parsed.speakingAnalysis || [
-            fillerCount > 3
-              ? "Too many filler words detected"
-              : "Good speaking clarity",
-
-            answer.length < 80
-              ? "Answer could be more detailed"
-              : "Good answer length",
-          ],
-        });
+        return NextResponse.json(
+          normalizeEvaluation(parsed, fallbackEvaluation),
+        );
       } catch (parseError) {
         console.error("JSON Parse Error:", parseError);
       }
     }
 
     // Safe fallback
-    return NextResponse.json({
-      score: 6,
-      confidenceScore: Math.max(5, 10 - fillerCount),
-
-      feedback:
-        "Decent answer, but it needs better structure and stronger examples.",
-
-      strengths: ["Basic understanding shown", "Attempted to answer clearly"],
-
-      improvements: [
-        "Add more practical examples",
-        "Improve explanation depth",
-      ],
-
-      speakingAnalysis: [
-        fillerCount > 3
-          ? "Too many filler words detected"
-          : "Good speaking clarity",
-
-        answer.length < 80
-          ? "Answer could be more detailed"
-          : "Good answer length",
-      ],
-    });
+    return NextResponse.json(fallbackEvaluation);
   } catch (error) {
     console.error("Evaluation API Error:", error);
 
     return NextResponse.json({
-      score: 5,
+      response:
+        "I couldn't evaluate that properly because something went wrong. Please answer once more so we can continue from the same point.",
+      followUp: "Could you try answering that question again?",
       confidenceScore: 5,
-
-      feedback: "Something went wrong during evaluation.",
-
-      strengths: [],
-
-      improvements: ["Please try again"],
-
-      speakingAnalysis: ["Unable to analyze speaking confidence"],
+      decision: "retry",
     });
   }
 }

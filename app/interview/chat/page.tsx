@@ -3,337 +3,264 @@
 import { useState, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 
+type ChatMessage = {
+  role: "assistant" | "user";
+  content: string;
+};
+
+type GeneratedQuestion = {
+  question: string;
+  sourceQuestion: string;
+  reused: boolean;
+};
+
+function normalizeQuestion(question: string) {
+  return question.trim().toLowerCase();
+}
+
 export default function ChatPage() {
   const searchParams = useSearchParams();
   const domain = searchParams.get("domain");
   const type = searchParams.get("type");
   const mode = searchParams.get("mode");
-  const resume = searchParams.get("resume");
-  const track = searchParams.get("track");
   const tech = searchParams.get("tech");
 
-  const [messages, setMessages] = useState<any[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [askedQuestions, setAskedQuestions] = useState<string[]>([]);
   const [count, setCount] = useState(0);
   const [loading, setLoading] = useState(false);
+
   const initialized = useRef(false);
-  const [scores, setScores] = useState<number[]>([]);
   const [listening, setListening] = useState(false);
-  const [questionCount, setQuestionCount] = useState(0);
-  const [currentTranscript, setCurrentTranscript] = useState("");
-  const [introAsked, setIntroAsked] = useState(false);
 
   const recognitionRef = useRef<any>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef("");
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const askedQuestionsRef = useRef<string[]>([]);
   const manualStopRef = useRef(false);
+  const suppressAutoSubmitRef = useRef(false);
+  const speakingRef = useRef(false);
+  const [lastQuestion, setLastQuestion] = useState("");
 
-  let resumeQuestions: string[] = [];
+  const isFirstQuestion = count === 0;
 
-  try {
-    const rawQuestions = searchParams.get("resumeQuestions") || "[]";
+  const MAX_QUESTIONS = 6;
 
-    resumeQuestions = JSON.parse(rawQuestions);
-  } catch (error) {
-    console.error("Resume questions parse error:", error);
-    resumeQuestions = [];
-  }
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
-  const MAX_QUESTIONS = 3;
+  useEffect(() => {
+    askedQuestionsRef.current = askedQuestions;
+  }, [askedQuestions]);
 
-  const startCamera = async () => {
-    if (mode !== "video") return;
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "end",
+    });
+  }, [messages, loading]);
 
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: false,
+  const rememberQuestion = (...questions: string[]) => {
+    setAskedQuestions((prev) => {
+      const next = [...prev];
+      const seen = new Set(prev.map(normalizeQuestion));
+
+      questions.forEach((question) => {
+        const normalized = normalizeQuestion(question);
+
+        if (normalized && !seen.has(normalized)) {
+          seen.add(normalized);
+          next.push(question);
+        }
       });
 
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-    } catch (error) {
-      console.error("Camera access denied:", error);
+      askedQuestionsRef.current = next;
+      return next;
+    });
+  };
+
+  const appendAssistantMessage = (content: string) => {
+    setMessages((prev) => [...prev, { role: "assistant", content }]);
+
+    // 🔥 Track last question
+    setLastQuestion(content);
+
+    if (mode === "voice" || mode === "video") {
+      speakText(content);
     }
+  };
+
+  const generateQuestion = async (): Promise<GeneratedQuestion> => {
+    const res = await fetch("/api/generate-question", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        domain,
+        tech,
+        previous: Array.from(
+          new Set(askedQuestionsRef.current.map((q) => normalizeQuestion(q))),
+        ),
+      }),
+    });
+
+    const data = await res.json();
+    const question = data.question || "";
+
+    return {
+      question,
+      sourceQuestion: data.sourceQuestion || question,
+      reused: Boolean(data.reused),
+    };
+  };
+
+  const getGeneratedQuestionText = async () => {
+    const generated = await generateQuestion();
+    rememberQuestion(generated.question, generated.sourceQuestion);
+    return generated.question;
   };
 
   const speakText = (text: string) => {
     if (!window.speechSynthesis) return;
 
+    speakingRef.current = true;
+
     const utterance = new SpeechSynthesisUtterance(text);
 
-    utterance.lang = "en-US";
-    utterance.rate = 1;
-    utterance.pitch = 1;
-
-    // 🔥 When AI finishes speaking,
-    // automatically start listening
     utterance.onend = () => {
-      if (mode === "voice" || mode === "video") {
-        setTimeout(() => {
-          startListening();
-        }, 1200);
-      }
+      speakingRef.current = false;
     };
 
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   };
 
-  const startListening = () => {
-    if (listening && recognitionRef.current) {
-      manualStopRef.current = true;
-
-      recognitionRef.current.abort();
-      recognitionRef.current = null;
-
-      setListening(false);
-      setCurrentTranscript("");
-      setInput("");
-
-      return;
-    }
-
-    const SpeechRecognition =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      alert("Speech recognition not supported");
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
-    recognitionRef.current = recognition;
-
-    recognition.lang = "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-
-    let finalTranscript = "";
-
-    if (!listening) {
-      setCurrentTranscript("");
-    }
-
-    setListening(true);
-
-    window.speechSynthesis.cancel();
-    recognition.start();
-
-    recognition.onresult = (event: any) => {
-      let interimTranscript = "";
-
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const transcript = event.results[i][0].transcript;
-
-        if (event.results[i].isFinal) {
-          finalTranscript += transcript + " ";
-        } else {
-          interimTranscript += transcript;
-        }
-      }
-
-      const combined = finalTranscript + interimTranscript;
-
-      setCurrentTranscript(combined);
-      setInput(combined);
-    };
-
-    recognition.onerror = (event: any) => {
-      if (event.error === "no-speech" || event.error === "aborted") {
-        setListening(false);
-        return;
-      }
-
-      console.error("Speech error:", event.error);
-      setListening(false);
-    };
-
-    recognition.onend = () => {
-      setListening(false);
-
-      // If user manually stopped → do nothing
-      if (manualStopRef.current) {
-        manualStopRef.current = false;
-        return;
-      }
-
-      if (mode === "voice" || mode === "video") {
-        const cleanAnswer = input.trim();
-
-        // Valid answer → submit
-        if (cleanAnswer.length > 15) {
-          setTimeout(() => {
-            sendMessage();
-          }, 500);
-        }
-
-        // Silence / stuck → move ahead naturally
-        else {
-          const aiMessage = {
-            role: "ai",
-            content: "Okay, no worries — let's move to the next question.",
-          };
-
-          setMessages((prev) => [...prev, aiMessage]);
-
-          setTimeout(() => {
-            loadQuestion();
-          }, 1000);
-        }
-      }
-    };
-  };
-
-  // 🔁 Load question
   const loadQuestion = async () => {
     if (loading) return;
-    try {
-      let nextQuestion = "";
-
-      // First question always intro
-      if (!introAsked && (mode === "voice" || mode === "video")) {
-        nextQuestion = "Tell me about yourself.";
-        setIntroAsked(true);
-      }
-
-      // Random resume question injection
-      else if (
-        resumeQuestions.length > 0 &&
-        Math.random() < 0.4 // 40% chance
-      ) {
-        const randomIndex = Math.floor(Math.random() * resumeQuestions.length);
-
-        nextQuestion = resumeQuestions[randomIndex];
-      }
-
-      // Otherwise normal AI-generated technical question
-      else {
-        const res = await fetch("/api/generate-question", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            domain,
-            tech,
-            previous: askedQuestions,
-          }),
-        });
-
-        const data = await res.json();
-        nextQuestion = data.question;
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "ai",
-          content: nextQuestion,
-        },
-      ]);
-
-      setAskedQuestions((prev) => [...prev, data.question]);
-
-      if (mode === "voice" || mode === "video") {
-        speakText(nextQuestion);
-      }
-
-      setQuestionCount((prev) => prev + 1);
-    } catch (error) {
-      console.error(error);
-    }
+    const nextQuestion = await getGeneratedQuestionText();
+    appendAssistantMessage(nextQuestion);
   };
 
-  // First question
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
 
+    // interview start
     loadQuestion();
-    startCamera();
   }, []);
 
-  // 🚀 Send answer
   const sendMessage = async () => {
-    if (!input.trim()) return;
+    const answer = inputRef.current.trim();
+    if (!answer) return;
 
-    const currentQuestion = messages[messages.length - 1]?.content;
+    const currentQuestion =
+      messagesRef.current[messagesRef.current.length - 1]?.content || "";
 
-    const userMessage = {
-      role: "user",
-      content: input,
-    };
+    // Push user message
+    setMessages((prev) => [...prev, { role: "user", content: answer }]);
 
-    setMessages((prev) => [...prev, userMessage]);
     setInput("");
+    inputRef.current = "";
     setLoading(true);
 
-    // Evaluate
     const res = await fetch("/api/evaluate-answer", {
       method: "POST",
-      body: JSON.stringify({
-        question: currentQuestion,
-        answer: input,
-        domain,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: currentQuestion, answer, domain }),
     });
 
     const data = await res.json();
 
-    setScores((prev) => [...prev, data.score]);
-
-    const aiMessage = {
-      role: "ai",
-      content: `⭐ Technical Score: ${data.score}/10
-
-    🎯 Confidence Score: ${data.confidenceScore}/10
-
-    📝 Feedback:
-    ${data.feedback}
-
-    ✅ Strengths:
-    ${(data.strengths || []).map((item: string) => `• ${item}`).join("\n")}
-
-    🗣 Speaking Analysis:
-    ${(data.speakingAnalysis || [])
-      .map((item: string) => `• ${item}`)
-      .join("\n")}
-
-    🔧 Improvements:
-    ${(data.improvements || []).map((item: string) => `• ${item}`).join("\n")}
-    `,
-    };
-
-    setMessages((prev) => [...prev, aiMessage]);
-
-    if (mode === "voice" || mode === "video") {
-      window.speechSynthesis.cancel();
-
-      speakText(`Your score is ${data.score} out of 10. ${data.feedback}`);
-    }
+    // 🧠 Step 1: Show feedback
+    setMessages((prev) => [
+      ...prev,
+      { role: "assistant", content: data.response },
+    ]);
 
     setLoading(false);
 
-    // Increase count
-    setCount((prev) => prev + 1);
+    // 🧠 Step 2: Count logic
+    const shouldAdvance =
+      data.decision === "continue" || data.decision === "switch";
 
-    // Stop interview
-    if (count + 1 >= MAX_QUESTIONS) {
-      const allScores = [...scores, data.score];
+    const nextCount = shouldAdvance ? count + 1 : count;
 
-      const query = encodeURIComponent(JSON.stringify(allScores));
+    if (shouldAdvance) setCount(nextCount);
 
-      window.location.href = `/interview/summary?scores=${query}`;
+    // 🧠 Step 3: End condition
+    if (nextCount >= MAX_QUESTIONS) {
+      setTimeout(() => {
+        window.location.href = "/interview/summary";
+      }, 2000);
       return;
     }
 
-    // Load next question
-    setTimeout(() => {
-      loadQuestion();
-    }, 1500);
+    // 🧠 Step 4: Decide next question (CLEAN LOGIC)
+    setTimeout(async () => {
+      let nextQuestion = "";
+
+      const followUp =
+        typeof data.followUp === "string" ? data.followUp.trim() : "";
+
+      // 🔥 Collect ALL previous assistant questions
+      const previousQuestions = messagesRef.current
+        .filter((msg) => msg.role === "assistant" && msg.content.endsWith("?"))
+        .map((msg) => normalizeQuestion(msg.content));
+
+      // 🔥 Check if follow-up already asked ANYTIME
+      const isRepeated =
+        followUp && previousQuestions.includes(normalizeQuestion(followUp));
+
+      if (data.decision === "continue" && followUp && !isRepeated) {
+        nextQuestion = followUp;
+        rememberQuestion(nextQuestion);
+      } else if (data.decision === "retry") {
+        nextQuestion = currentQuestion;
+      } else {
+        nextQuestion = await getGeneratedQuestionText();
+      }
+
+      const lastFewQuestions = messagesRef.current
+        .filter((m) => m.role === "assistant" && m.content.endsWith("?"))
+        .slice(-3)
+        .map((m) => normalizeQuestion(m.content));
+
+      if (
+        nextQuestion &&
+        lastFewQuestions.includes(normalizeQuestion(nextQuestion))
+      ) {
+        nextQuestion = await getGeneratedQuestionText();
+      }
+
+      if (followUp && followUp.toLowerCase().includes("hardest part")) {
+        nextQuestion = await getGeneratedQuestionText();
+      }
+
+      // BLOCK INTRO QUESTIONS MID-INTERVIEW
+      if (
+        !isFirstQuestion &&
+        nextQuestion &&
+        normalizeQuestion(nextQuestion).includes("tell me about yourself")
+      ) {
+        nextQuestion = await getGeneratedQuestionText();
+      }
+
+      if (nextQuestion) {
+        rememberQuestion(nextQuestion);
+
+        setMessages((prev) => [
+          ...prev,
+          { role: "assistant", content: nextQuestion },
+        ]);
+
+        if (mode === "voice" || mode === "video") {
+          speakText(nextQuestion);
+        }
+      }
+    }, 1200);
   };
 
   return (
@@ -375,24 +302,31 @@ export default function ChatPage() {
         {loading && (
           <div className="bg-gray-900 p-3 rounded-xl w-fit">Thinking...</div>
         )}
+
+        <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}
       <div className="p-4 border-t border-gray-800 flex gap-2">
         <input
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            setInput(e.target.value);
+            inputRef.current = e.target.value;
+          }}
           className="flex-1 bg-gray-900 p-3 rounded-xl outline-none"
           placeholder="Type your answer..."
         />
+
         <button
-          onClick={startListening}
+          onClick={() => {}}
           className={`px-4 rounded-xl ${
             listening ? "bg-red-500" : "bg-gray-700"
           }`}
         >
           🎤
         </button>
+
         <button
           onClick={sendMessage}
           disabled={loading}

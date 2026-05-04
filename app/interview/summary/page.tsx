@@ -1,32 +1,28 @@
 "use client";
 
-import { useSearchParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 export default function SummaryPage() {
-  const params = useSearchParams();
   const router = useRouter();
-
-  const scores = JSON.parse(params.get("scores") || "[]");
-
-  const avg =
-    scores.reduce((a: number, b: number) => a + b, 0) / (scores.length || 1);
 
   return (
     <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-6">
-      <h1 className="text-4xl font-bold mb-6">Interview Summary 📊</h1>
+      <h1 className="text-4xl font-bold mb-6">Interview Complete</h1>
 
       <div className="bg-gray-900 p-6 rounded-2xl w-full max-w-md space-y-4">
         <div>
-          <h2 className="text-lg">⭐ Average Score</h2>
-          <p className="text-2xl font-bold">{avg.toFixed(1)}/10</p>
+          <h2 className="text-lg">Conversation Review</h2>
+          <p className="text-gray-400">
+            You completed the practice interview. Keep reviewing the assistant
+            responses and follow-up questions to improve your answers.
+          </p>
         </div>
 
         <div>
-          <h2 className="text-lg">👍 Performance</h2>
+          <h2 className="text-lg">Next Step</h2>
           <p className="text-gray-400">
-            {avg >= 7
-              ? "Strong performance. You're interview ready!"
-              : "Needs improvement. Keep practicing!"}
+            Start another session when you are ready to practice a new
+            conversation.
           </p>
         </div>
 

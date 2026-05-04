@@ -74,18 +74,25 @@ export default function ExamChatPage() {
 
     const aiMessage = {
       role: "ai",
-      content: `⭐ Score: ${data.score}/10
-
-📝 Feedback:
-${data.feedback}
-
-🔧 Improvements:
-${(data.improvements || []).map((item: string) => `• ${item}`).join("\n")}
-`,
+      content: data.response,
     };
 
     setMessages((prev) => [...prev, aiMessage]);
     setLoading(false);
+
+    if (data.decision !== "switch" && data.followUp) {
+      setTimeout(() => {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "ai",
+            content: data.followUp,
+          },
+        ]);
+      }, 1000);
+
+      return;
+    }
 
     setTimeout(() => {
       loadQuestion();
