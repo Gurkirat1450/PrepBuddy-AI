@@ -8,7 +8,7 @@
   "You are setting up a new Cisco switch. What are the essential initial security configurations you would implement to harden the device?",
   "Explain the components and process of DHCP. If clients on a segment are not receiving IP addresses, what are some potential causes and initial troubleshooting steps?",
   "Discuss the importance of Quality of Service (QoS) in a modern network. How does QoS help manage network traffic, and what are some basic QoS mechanisms you might encounter?",
-  "Describe the fundamentals of wireless security. What is the significance of WPA2/WPA3 in securing Wi-Fi networks, and what is the difference between personal and enterprise modes?"
+  "Describe the fundamentals of wireless security. What is the significance of WPA2/WPA3 in securing Wi-Fi networks, and what is the difference between personal and enterprise modes?",
   "What is a computer network and why is it important?",
   "Explain the OSI model and its layers.",
   "How does the TCP/IP model differ from the OSI model?",

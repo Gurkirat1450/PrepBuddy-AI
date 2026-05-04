@@ -5,104 +5,65 @@ export async function POST(req: Request) {
     const { resumeText } = await req.json();
 
     if (!resumeText) {
-      return NextResponse.json({
-        success: false,
-        questions: [],
-      });
+      return NextResponse.json({ success: false, questions: [] });
     }
 
-    const prompt = `
-You are a professional technical interviewer.
-
-Read this candidate's resume carefully.
+    const prompt = `You are a professional technical interviewer. Read this resume carefully and generate 5 realistic interview questions based ONLY on what's in the resume.
 
 Resume:
-${resumeText}
-
-Generate 5 realistic interview questions based ONLY on the resume.
+${resumeText.slice(0, 2000)}
 
 Focus on:
-- projects
-- internships
-- education
-- technical decisions
-- problem solving
-- achievements
+- Specific projects mentioned
+- Technologies and tools used
+- Work experience or internships
+- Achievements and metrics
+- Technical decisions made
 
 Rules:
-- Return ONLY JSON array
-- No explanation
-- No markdown
-- No headings
+- Questions must reference specific things from the resume
+- Make them conversational, like a real interviewer would ask
+- Do NOT ask generic questions like "Tell me about yourself"
 
-Example:
+Return a JSON array of exactly 5 questions:
+{"questions": ["question 1", "question 2", "question 3", "question 4", "question 5"]}`;
 
-[
-  "Tell me about your Sign Language Recognition project.",
-  "Why did you choose CNN for gesture recognition?",
-  "What challenges did you face while training your model?"
-]
-`;
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-        }),
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
-    );
-
-    const result = await response.json();
-
-    let rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-    rawText = rawText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-
-    const match = rawText.match(/\[[\s\S]*\]/);
-
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[0]);
-
-        return NextResponse.json({
-          success: true,
-          questions: parsed,
-        });
-      } catch (error) {
-        console.error("Resume question parse error:", error);
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      questions: [
-        "Tell me about yourself.",
-        "Can you explain one major project from your resume?",
-        "What technical challenge did you face recently?",
-      ],
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.7,
+        max_tokens: 500,
+        response_format: { type: "json_object" },
+      }),
     });
+
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content || "";
+
+    try {
+      const parsed = JSON.parse(text);
+      const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+      return NextResponse.json({ success: true, questions });
+    } catch {
+      return NextResponse.json({
+        success: true,
+        questions: [
+          "Can you walk me through one of the projects on your resume?",
+          "What was the most challenging technical problem you solved?",
+          "Tell me about a technology you used and why you chose it.",
+          "What was your role and contribution in your most recent project?",
+          "How did you handle a difficult situation in one of your projects?",
+        ],
+      });
+    }
   } catch (error) {
     console.error("Resume question API error:", error);
-
-    return NextResponse.json({
-      success: false,
-      questions: [],
-    });
+    return NextResponse.json({ success: false, questions: [] });
   }
 }

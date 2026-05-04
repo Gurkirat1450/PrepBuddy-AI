@@ -8,7 +8,7 @@
   "You are tasked with optimizing a memory-intensive application. Discuss how understanding cache coherence protocols, cache line size, and techniques like data prefetching could help in improving overall performance.",
   "Explain the different types of hazards that can occur in a pipelined processor. Propose a specific strategy to mitigate each type of hazard and discuss the performance implications or trade-offs of your proposed solutions.",
   "Given a graph, explain the fundamental difference between finding an Euler path and a Hamiltonian path. Discuss the known computational complexity of determining the existence of each, and why one is significantly harder than the other.",
-  "During the code generation phase of a compiler, what are some common peephole optimizations performed? Illustrate with an example how such optimizations improve the efficiency or performance of the generated machine code."
+  "During the code generation phase of a compiler, what are some common peephole optimizations performed? Illustrate with an example how such optimizations improve the efficiency or performance of the generated machine code.",
   "What is time complexity of algorithms?",
   "What is space complexity?",
   "What is Big-O notation?",

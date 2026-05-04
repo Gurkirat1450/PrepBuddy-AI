@@ -17,7 +17,7 @@ export default function ResumeUploadPage() {
 
   const continueInterview = async () => {
     if (!file) {
-      alert("Please upload your resume PDF first.");
+      alert("Please upload your resume DOCX first.");
       return;
     }
 
@@ -33,30 +33,33 @@ export default function ResumeUploadPage() {
 
     const data = await res.json();
 
-    setLoading(false);
-
     if (!data.success) {
-      alert("Failed to read resume.");
+      alert("Failed to read resume. Please try again.");
+      setLoading(false);
       return;
     }
 
     const questionRes = await fetch("/api/generate-resume-questions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        resumeText: data.text,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resumeText: data.text }),
     });
 
     const questionData = await questionRes.json();
 
-    router.push(
-      `/interview/chat?mode=${mode}&domain=${domain}&track=${track}&tech=${tech}&resume=${encodeURIComponent(
-        data.text,
-      )}&resumeQuestions=${JSON.stringify(questionData.questions)}`,
-    );
+    setLoading(false);
+
+    const params = new URLSearchParams({
+      mode: mode || "text",
+      domain: domain || "",
+      track: track || "",
+      tech: tech || "",
+      resume: data.text.slice(0, 3000), // keep URL manageable
+      candidateName: data.candidateName || "",
+      resumeQuestions: JSON.stringify(questionData.questions || []),
+    });
+
+    router.push(`/interview/chat?${params.toString()}`);
   };
 
   return (
@@ -65,21 +68,19 @@ export default function ResumeUploadPage() {
         <h1 className="text-4xl font-bold mb-6 text-center">
           Upload Resume 📄
         </h1>
-
         <p className="text-gray-400 mb-6 text-center">
-          Upload your resume PDF so AI can create a personalized interview.
+          Upload your resume so AI can create a personalized interview
+          experience.
         </p>
 
         <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6">
           <label className="block text-lg font-medium mb-4">
             Upload Resume DOCX
           </label>
-
           <label className="cursor-pointer block">
             <div className="bg-black border border-gray-700 rounded-xl p-4 text-center hover:border-white transition">
               {file ? file.name : "Click to upload your DOCX resume"}
             </div>
-
             <input
               type="file"
               accept=".docx"

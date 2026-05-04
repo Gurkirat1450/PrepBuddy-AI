@@ -1,252 +1,275 @@
 import { NextResponse } from "next/server";
 
-type EvaluationDecision = "continue" | "retry" | "switch";
+const ACK_PHRASES = [
+  "Right.",
+  "Got it.",
+  "Okay.",
+  "Alright.",
+  "Hmm.",
+  "Interesting.",
+  "Nice.",
+  "Fair enough.",
+  "That makes sense.",
+  "Good.",
+  "Sure.",
+  "Right, makes sense.",
+];
 
-type ConversationalEvaluation = {
-  response: string;
-  followUp: string;
-  confidenceScore: number;
-  decision: EvaluationDecision;
-};
+const TRANSITION_PHRASES = [
+  "Let me ask you something else —",
+  "Okay, so moving on —",
+  "Good. Now tell me —",
+  "Let's shift gears a bit —",
+  "Now, I'm curious —",
+  "Let me dig into something else —",
+  "Okay, next up —",
+  "Alright, so —",
+];
 
-const VALID_DECISIONS: EvaluationDecision[] = ["continue", "retry", "switch"];
-
-function clampConfidenceScore(value: unknown, fallback: number) {
-  const numericScore =
-    typeof value === "number" && Number.isFinite(value) ? value : fallback;
-
-  return Math.min(10, Math.max(1, Math.round(numericScore)));
+function randomFrom(arr: string[]) {
+  return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function getFallbackDecision(answer: string): EvaluationDecision {
-  const trimmedAnswer = answer.trim();
+// ── Groq API call ─────────────────────────────────────────────────────────────
+// Free tier: 30 req/min, 14,400 req/day — way more than enough
+async function callGroq(prompt: string, temperature = 0.9): Promise<string> {
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.3-70b-versatile", // best free model on Groq
+        messages: [{ role: "user", content: prompt }],
+        temperature,
+        max_tokens: 500,
+        response_format: { type: "json_object" }, // forces JSON output
+      }),
+    });
 
-  if (!trimmedAnswer || trimmedAnswer.length < 15) {
-    return "switch";
+    if (!res.ok) {
+      const err = await res.text();
+      console.error(`Groq error ${res.status}:`, err.slice(0, 200));
+      return "";
+    }
+
+    const data = await res.json();
+    const text = data?.choices?.[0]?.message?.content || "";
+    console.log(`✅ Groq response (150 chars): ${text.slice(0, 150)}`);
+    return text;
+  } catch (e) {
+    console.error("Groq call failed:", e);
+    return "";
   }
-
-  if (trimmedAnswer.length < 80) {
-    return "retry";
-  }
-
-  return "continue";
 }
 
-function buildFallbackEvaluation(
-  answer: string,
-  fillerCount: number,
-): ConversationalEvaluation {
-  const decision = getFallbackDecision(answer);
-
-  if (decision === "switch") {
-    return {
-      response:
-        "That's okay, it sounds like you may need a moment on this one. Let's move to a nearby question and keep the conversation flowing.",
-      followUp: "Can you walk me through a related example you know well?",
-      confidenceScore: clampConfidenceScore(10 - fillerCount, 4),
-      decision,
-    };
+function parseJSON(raw: string): Record<string, any> | null {
+  const cleaned = raw
+    .replace(/```json/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start === -1 || end === -1) return null;
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1));
+  } catch {
+    return null;
   }
-
-  if (decision === "retry") {
-    return {
-      response:
-        "You have the start of an answer, but it needs a clearer example and a stronger ending. Try framing it as situation, action, and result.",
-      followUp: "Can you answer that again with one concrete example?",
-      confidenceScore: clampConfidenceScore(10 - fillerCount, 6),
-      decision,
-    };
-  }
-
-  return {
-    response:
-      "That answer is clear enough to build on, especially if you add one measurable outcome. I would like to hear a bit more about your specific contribution.",
-    followUp:
-      "What was the hardest part of that work, and how did you handle it?",
-    confidenceScore: clampConfidenceScore(10 - fillerCount, 7),
-    decision,
-  };
-}
-
-function normalizeEvaluation(
-  parsed: Record<string, unknown>,
-  fallback: ConversationalEvaluation,
-): ConversationalEvaluation {
-  const decision = VALID_DECISIONS.includes(
-    parsed.decision as EvaluationDecision,
-  )
-    ? (parsed.decision as EvaluationDecision)
-    : fallback.decision;
-
-  return {
-    response:
-      typeof parsed.response === "string" && parsed.response.trim()
-        ? parsed.response.trim()
-        : fallback.response,
-    followUp:
-      typeof parsed.followUp === "string" && parsed.followUp.trim()
-        ? parsed.followUp.trim()
-        : fallback.followUp,
-    confidenceScore: clampConfidenceScore(
-      parsed.confidenceScore,
-      fallback.confidenceScore,
-    ),
-    decision,
-  };
 }
 
 export async function POST(req: Request) {
   try {
-    const { question, answer, domain, type } = await req.json();
-    const candidateAnswer = typeof answer === "string" ? answer : "";
+    const {
+      question = "",
+      answer = "",
+      domain = "",
+      tech = "",
+      interviewStyle = "formal",
+      conversationHistory = [],
+      candidateName = "",
+      resumeContext = "",
+      questionBank = [],
+      questionCount = 0,
+    } = await req.json();
 
-    const prompt = `
-    You are a real interviewer conducting a conversation.
+    const candidateAnswer = typeof answer === "string" ? answer.trim() : "";
+    const firstName = candidateName ? candidateName.split(" ")[0] : "";
 
-    Question:
-    ${question}
-
-    Candidate Answer:
-    ${answer}
-
-    IMPORTANT:
-    - The candidate has already answered previous questions.
-    - NEVER repeat a previous question.
-    - NEVER go back to earlier questions like "hardest part".
-
-    Your task:
-    1. Give short, specific feedback (2–3 lines)
-    2. Ask a NEW follow-up question
-
-    NEVER ask:
-    "What was the hardest part of that work"
-
-    NEVER reuse any previously asked question.
-
-    If unsure, ask about:
-    - performance evaluation
-    - trade-offs
-    - improvements
-    - edge cases
-    - scalability
-
-    Each follow-up MUST be different from all previous questions.
-
-    STRICT RULES:
-    - Do NOT repeat or rephrase previous questions
-    - Each follow-up must explore a NEW angle
-    - Always go deeper or move forward
-
-    GOOD follow-ups:
-    - "How did you evaluate your model performance?"
-    - "What limitations did your approach have?"
-    - "What would you improve next time?"
-    - "How did you handle edge cases?"
-
-    BAD follow-ups:
-    - repeating "What was the hardest part"
-    - reusing earlier questions
-
-    Return ONLY JSON:
-
-    {
-      "response": "short feedback",
-      "followUp": "new unique question",
-      "confidenceScore": number,
-      "decision": "continue"
-    }
-    `;
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: prompt,
-                },
-              ],
-            },
-          ],
-          generationConfig: {
-            temperature: 0.2,
-            topK: 20,
-            topP: 0.8,
-            maxOutputTokens: 500,
-            responseMimeType: "application/json",
-          },
-        }),
-      },
+    console.log(
+      `\n--- evaluate | style=${interviewStyle} | qCount=${questionCount} | bankLen=${questionBank.length} ---`,
     );
 
-    const result = await response.json();
-
-    let rawText = result?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-    // Remove markdown wrappers if Gemini adds them
-    rawText = rawText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-
-    // Extract JSON safely
-    const cleanedText = rawText
-      .replace(/```json/g, "")
-      .replace(/```/g, "")
-      .trim();
-
-    const match = cleanedText.match(/\{[\s\S]*\}/);
-
-    // Filler word detection
-    const fillerWords = [
-      "um",
-      "uh",
-      "like",
-      "actually",
-      "basically",
-      "you know",
-    ];
-
-    const lowerAnswer = candidateAnswer.toLowerCase();
-
-    const fillerCount = fillerWords.reduce((count, word) => {
-      const matches = lowerAnswer.match(new RegExp(`\\b${word}\\b`, "g"));
-
-      return count + (matches ? matches.length : 0);
-    }, 0);
-
-    const fallbackEvaluation = buildFallbackEvaluation(
-      candidateAnswer,
-      fillerCount,
-    );
-
-    if (match) {
-      try {
-        const parsed = JSON.parse(match[0]);
-
-        return NextResponse.json(
-          normalizeEvaluation(parsed, fallbackEvaluation),
-        );
-      } catch (parseError) {
-        console.error("JSON Parse Error:", parseError);
-      }
+    if (!candidateAnswer || candidateAnswer.length < 5) {
+      return NextResponse.json({
+        interviewerMessage: "",
+        coachFeedback: "",
+        nextQuestion: "",
+        confidenceScore: 3,
+        decision: "switch",
+      });
     }
 
-    // Safe fallback
-    return NextResponse.json(fallbackEvaluation);
-  } catch (error) {
-    console.error("Evaluation API Error:", error);
+    const historyLines = conversationHistory
+      .slice(-8)
+      .map(
+        (m: { role: string; content: string }) =>
+          `${m.role === "user" ? "Candidate" : "Interviewer"}: ${m.content.slice(0, 120)}`,
+      )
+      .join("\n");
+
+    const askedQuestions: string[] = conversationHistory
+      .filter((m: { role: string; content: string }) => m.role === "assistant")
+      .map((m: { content: string }) => m.content.trim())
+      .slice(-6);
+
+    const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+    const askedNorm = new Set(askedQuestions.map(norm));
+    const unusedBank = (questionBank as string[]).filter(
+      (q) => !askedNorm.has(norm(q)),
+    );
+    const bankSuggestion =
+      unusedBank.length > 0
+        ? unusedBank[Math.floor(Math.random() * unusedBank.length)]
+        : null;
+
+    const resumeHint = resumeContext
+      ? `Resume context: ${resumeContext.slice(0, 200)}\n`
+      : "";
+
+    const ack = randomFrom(ACK_PHRASES);
+    const transition =
+      questionCount === 1
+        ? "Alright, let me ask some technical questions now —"
+        : questionCount > 0 && questionCount % 3 === 0
+          ? "Okay, let's switch gears —"
+          : randomFrom(TRANSITION_PHRASES);
+
+    const askedList =
+      askedQuestions.map((q, i) => `${i + 1}. ${q.slice(0, 60)}`).join("\n") ||
+      "None yet.";
+
+    // Fallbacks when API fails
+    const buildFormalFallback = (): string => {
+      const q =
+        bankSuggestion ||
+        `Tell me about your approach to ${tech} best practices.`;
+      return `${ack} ${transition} ${q}`;
+    };
+
+    const buildAdviceFallback = () => ({
+      coachFeedback: `You gave a solid answer${firstName ? `, ${firstName}` : ""}. To make it stronger, add a specific example with a measurable outcome — numbers and concrete results make answers much more memorable to interviewers.`,
+      nextQuestion: `Alright, let's keep going — ${bankSuggestion || `How do you handle errors in ${tech}?`}`,
+    });
+
+    // ── FORMAL MODE ──────────────────────────────────────────────────────────
+    if (interviewStyle === "formal") {
+      const prompt = `You are a senior technical interviewer interviewing ${firstName || "a candidate"} for a ${domain} / ${tech} role.
+${resumeHint}
+Recent conversation:
+${historyLines}
+
+Candidate's answer: "${candidateAnswer.slice(0, 300)}"
+
+Questions already asked (DO NOT repeat any of these):
+${askedList}
+
+${bankSuggestion ? `Suggested next question topic: "${bankSuggestion}"` : ""}
+
+Write your next interviewer message. It must:
+1. Start with a short acknowledgment: "${ack}" or similar
+2. Then a natural transition: "${transition}" or similar
+3. End with ONE new interview question (not from the already-asked list)
+
+Keep it 2-3 sentences. Sound like a real human interviewer — casual, natural.
+Never say "Great answer!" or "Excellent!" — too fake.
+${firstName ? `Occasionally use "${firstName}" naturally.` : ""}
+
+Also rate the answer 1-10 and set decision to "continue", "retry" (vague answer), or "switch" (wrong/blank).
+
+Respond with valid JSON only:
+{"interviewerMessage": "your 2-3 sentence reply ending with a question", "confidenceScore": 7, "decision": "continue"}`;
+
+      const raw = await callGroq(prompt, 0.9);
+      const parsed = parseJSON(raw);
+      const msg = parsed?.interviewerMessage?.trim() || buildFormalFallback();
+      console.log(`formal msg: ${msg.slice(0, 100)}`);
+
+      return NextResponse.json({
+        interviewerMessage: msg,
+        coachFeedback: "",
+        nextQuestion: "",
+        confidenceScore: parsed?.confidenceScore || 6,
+        decision: parsed?.decision || "continue",
+      });
+    }
+
+    // ── ADVICE MODE ───────────────────────────────────────────────────────────
+    if (interviewStyle === "advice") {
+      const prompt = `You are a friendly interview coach helping ${firstName || "a student"} prepare for a ${domain} / ${tech} interview.
+${resumeHint}
+Question asked: "${question.slice(0, 150)}"
+Candidate's answer: "${candidateAnswer.slice(0, 300)}"
+
+Questions already asked (DO NOT repeat any of these):
+${askedList}
+
+${bankSuggestion ? `Suggested next question topic: "${bankSuggestion}"` : ""}
+
+Write two things:
+
+1. coachFeedback: 3 sentences of specific coaching.
+   - Reference something they actually said
+   - Point out one strength and one concrete improvement
+   - Give a tip: "Next time, try..." or "You could strengthen this by..."
+   - Use their name "${firstName || "you"}" naturally
+   - Do NOT start with "Good answer" or any generic opener
+
+2. nextQuestion: a natural transition + one new question.
+   - Start with "Alright, next —" or "Okay, let's keep going —" or similar
+   - Ask one new question NOT from the already-asked list above
+
+Also rate the answer 1-10 and set decision to "continue", "retry", or "switch".
+
+Respond with valid JSON only:
+{"coachFeedback": "3 sentences of specific feedback", "nextQuestion": "transition + question", "confidenceScore": 7, "decision": "continue"}`;
+
+      const raw = await callGroq(prompt, 0.88);
+      const parsed = parseJSON(raw);
+      const fallback = buildAdviceFallback();
+
+      const coachFeedback =
+        parsed?.coachFeedback?.trim() || fallback.coachFeedback;
+      const nextQuestion =
+        parsed?.nextQuestion?.trim() || fallback.nextQuestion;
+
+      console.log(`advice feedback: ${coachFeedback.slice(0, 100)}`);
+      console.log(`advice nextQ: ${nextQuestion.slice(0, 80)}`);
+
+      return NextResponse.json({
+        interviewerMessage: "",
+        coachFeedback,
+        nextQuestion,
+        confidenceScore: parsed?.confidenceScore || 6,
+        decision: parsed?.decision || "continue",
+      });
+    }
 
     return NextResponse.json({
-      response:
-        "I couldn't evaluate that properly because something went wrong. Please answer once more so we can continue from the same point.",
-      followUp: "Could you try answering that question again?",
+      interviewerMessage: "",
+      coachFeedback: "",
+      nextQuestion: "",
+      confidenceScore: 5,
+      decision: "continue",
+    });
+  } catch (error) {
+    console.error("evaluate-answer error:", error);
+    return NextResponse.json({
+      interviewerMessage: "",
+      coachFeedback: "",
+      nextQuestion: "",
       confidenceScore: 5,
       decision: "retry",
     });

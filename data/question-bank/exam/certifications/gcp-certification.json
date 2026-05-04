@@ -8,7 +8,7 @@
   "Discuss the role of Shared VPC and Service Perimeters in a multi-project GCP environment. When would you typically use one over the other, or both?",
   "How do you approach managing identities and access control in a large GCP organization with varying permission requirements for different teams and projects?",
   "You need to automate the deployment of infrastructure on GCP using Infrastructure as Code. Which tools would you consider, and what are the advantages and disadvantages of your preferred choice?",
-  "Given the rapid pace of change in GCP services, how do you stay updated with new features, best practices, and evolving certification requirements?"
+  "Given the rapid pace of change in GCP services, how do you stay updated with new features, best practices, and evolving certification requirements?",
   "What is Google Cloud Platform and what are its core services?",
   "How does GCP differ from AWS and Azure in terms of architecture?",
   "What is Google Compute Engine and when should you use it?",
