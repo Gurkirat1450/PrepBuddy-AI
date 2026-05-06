@@ -3,14 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "generate:questions": "node scripts/generateQuestions.js"
-  },
-  "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start"
   },
   "dependencies": {
+    "@mediapipe/camera_utils": "^0.3.1675466862",
+    "@mediapipe/face_mesh": "^0.4.1633559619",
     "axios": "^1.15.0",
     "dotenv": "^17.4.2",
     "mammoth": "^1.12.0",

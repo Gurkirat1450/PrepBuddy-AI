@@ -30,8 +30,6 @@ function randomFrom(arr: string[]) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-// ── Groq API call ─────────────────────────────────────────────────────────────
-// Free tier: 30 req/min, 14,400 req/day — way more than enough
 async function callGroq(prompt: string, temperature = 0.9): Promise<string> {
   try {
     const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
@@ -41,26 +39,23 @@ async function callGroq(prompt: string, temperature = 0.9): Promise<string> {
         Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "llama-3.3-70b-versatile", // best free model on Groq
+        model: "llama-3.3-70b-versatile",
         messages: [{ role: "user", content: prompt }],
         temperature,
-        max_tokens: 500,
-        response_format: { type: "json_object" }, // forces JSON output
+        max_tokens: 600,
+        response_format: { type: "json_object" },
       }),
     });
-
     if (!res.ok) {
-      const err = await res.text();
-      console.error(`Groq error ${res.status}:`, err.slice(0, 200));
+      console.error(`Groq ${res.status}`);
       return "";
     }
-
     const data = await res.json();
     const text = data?.choices?.[0]?.message?.content || "";
-    console.log(`✅ Groq response (150 chars): ${text.slice(0, 150)}`);
+    console.log(`✅ Groq: ${text.slice(0, 120)}`);
     return text;
   } catch (e) {
-    console.error("Groq call failed:", e);
+    console.error("Groq failed:", e);
     return "";
   }
 }
@@ -80,6 +75,51 @@ function parseJSON(raw: string): Record<string, any> | null {
   }
 }
 
+// Build audio context string for prompt
+function buildAudioContext(audioMetrics: any): string {
+  if (!audioMetrics) return "";
+
+  const {
+    fillerCount,
+    fillerWords,
+    wordCount,
+    wordsPerMinute,
+    speakingTimeSeconds,
+  } = audioMetrics;
+
+  const paceNote =
+    wordsPerMinute > 180
+      ? "spoke very fast (may seem rushed)"
+      : wordsPerMinute < 90
+        ? "spoke very slowly (may seem hesitant)"
+        : "spoke at a good pace";
+
+  const fillerNote =
+    fillerCount > 5
+      ? `used many filler words (${fillerCount} times: ${fillerWords?.join(", ")})`
+      : fillerCount > 2
+        ? `used some filler words (${fillerCount} times: ${fillerWords?.join(", ")})`
+        : fillerCount > 0
+          ? `used few filler words (${fillerCount})`
+          : "no filler words detected";
+
+  const lengthNote =
+    wordCount < 30
+      ? "very short answer"
+      : wordCount < 60
+        ? "brief answer"
+        : wordCount > 200
+          ? "detailed answer"
+          : "appropriate length";
+
+  return `
+VOICE DELIVERY METRICS (from speech recognition):
+- Speaking pace: ${wordsPerMinute} words/min (${paceNote})
+- Filler words: ${fillerNote}
+- Answer length: ${wordCount} words (${lengthNote})
+- Speaking duration: ${speakingTimeSeconds} seconds`;
+}
+
 export async function POST(req: Request) {
   try {
     const {
@@ -93,13 +133,45 @@ export async function POST(req: Request) {
       resumeContext = "",
       questionBank = [],
       questionCount = 0,
+      audioMetrics = null,
+      videoMetrics = null,
+      inputMode = "text", // "text" | "voice" | "video"
     } = await req.json();
 
     const candidateAnswer = typeof answer === "string" ? answer.trim() : "";
     const firstName = candidateName ? candidateName.split(" ")[0] : "";
+    const isVoiceMode = inputMode === "voice";
+    const isVideoMode = inputMode === "video";
+
+    // Build video context for prompt
+    const buildVideoContext = (vm: any): string => {
+      if (!vm || vm.samplesCount === 0) return "";
+      const eyeNote =
+        vm.eyeContactPercent > 70
+          ? "good — maintained strong eye contact"
+          : vm.eyeContactPercent > 40
+            ? "inconsistent — looked away frequently"
+            : "poor — mostly looked away from camera";
+      const postureNote =
+        vm.headStraightPercent > 80
+          ? "good — head upright throughout"
+          : vm.headStraightPercent > 50
+            ? "some head tilting"
+            : "frequent head tilting detected";
+      const expressionNote =
+        vm.expressionNotes?.length > 0
+          ? vm.expressionNotes.join(", ")
+          : "neutral";
+      return `
+VIDEO ANALYSIS (from webcam during answer):
+- Eye contact: ${vm.eyeContactPercent}% (${eyeNote})
+- Head posture: ${vm.headStraightPercent}% upright (${postureNote})
+- Detected expressions: ${expressionNote}`;
+    };
+    const videoContext = buildVideoContext(videoMetrics);
 
     console.log(
-      `\n--- evaluate | style=${interviewStyle} | qCount=${questionCount} | bankLen=${questionBank.length} ---`,
+      `\n--- evaluate | style=${interviewStyle} | mode=${inputMode} | qCount=${questionCount} | bankLen=${questionBank.length} ---`,
     );
 
     if (!candidateAnswer || candidateAnswer.length < 5) {
@@ -107,6 +179,7 @@ export async function POST(req: Request) {
         interviewerMessage: "",
         coachFeedback: "",
         nextQuestion: "",
+        internalFeedback: "Answer was too short to evaluate.",
         confidenceScore: 3,
         decision: "switch",
       });
@@ -138,6 +211,10 @@ export async function POST(req: Request) {
     const resumeHint = resumeContext
       ? `Resume context: ${resumeContext.slice(0, 200)}\n`
       : "";
+    const audioContext = buildAudioContext(audioMetrics);
+    const combinedContext = [audioContext, videoContext]
+      .filter(Boolean)
+      .join("\n");
 
     const ack = randomFrom(ACK_PHRASES);
     const transition =
@@ -151,108 +228,164 @@ export async function POST(req: Request) {
       askedQuestions.map((q, i) => `${i + 1}. ${q.slice(0, 60)}`).join("\n") ||
       "None yet.";
 
-    // Fallbacks when API fails
-    const buildFormalFallback = (): string => {
-      const q =
-        bankSuggestion ||
-        `Tell me about your approach to ${tech} best practices.`;
-      return `${ack} ${transition} ${q}`;
-    };
+    // ── SCORING RUBRIC ────────────────────────────────────────────────────────
+    const textScoringRubric = `
+Score STRICTLY on 5 parameters (0-2 each, total /10). Do NOT default to 6 or 7.
+
+1. Technical Accuracy (0-2)
+   0 = Wrong or missing. 1 = Partially correct, key gaps. 2 = Fully correct, no errors.
+
+2. Depth & Detail (0-2)
+   0 = Surface/buzzwords only ("it improves performance").
+   1 = Some explanation but vague ("it uses virtual DOM to reduce updates").
+   2 = Deep explanation with mechanism ("React diffs the virtual DOM tree, finds minimal changes, batches DOM updates").
+
+3. Real-world Application (0-2)
+   0 = No example or project mentioned.
+   1 = Vague reference ("I've used it in projects").
+   2 = Specific: project name, what they built, concrete outcome.
+
+4. Communication Clarity (0-2)
+   0 = Rambling, hard to follow. 1 = Mostly clear but unstructured. 2 = Concise, well-organized.
+
+5. Completeness (0-2)
+   0 = Answered a different question or missed main point.
+   1 = Partial — answered part of the question.
+   2 = Fully addressed everything asked.
+
+STRICT BENCHMARKS (to prevent score inflation):
+- Score 4-5: Vague, surface-level, no examples, partially correct
+- Score 6-7: Mostly correct, some depth, weak or no real example
+- Score 8-9: Correct, specific, clear example with outcome
+- Score 10: Exceptional — deep, precise, insightful, strong example
+
+CRITICAL: Vary your scores. If you gave 6 to a previous answer, this one should be different unless identical quality. Typical interview = 4-7 range.`;
+
+    const voiceScoringRubric = `
+Score STRICTLY on 7 parameters (total /10). Do NOT default to 6.
+
+1. Technical Accuracy (0-2)
+   0=wrong/missing, 1=partially correct, 2=fully correct
+
+2. Depth & Detail (0-2)
+   0=buzzwords only, 1=some explanation, 2=deep mechanism explained
+
+3. Real-world Application (0-1)
+   0=no example, 1=specific project/outcome mentioned
+
+4. Communication Clarity (0-1)
+   0=rambling/hard to follow, 1=structured and clear
+
+5. Completeness (0-1)
+   0=missed main point, 1=fully answered
+
+6. Fluency (0-2) — based on voice metrics below
+   2=natural flow, few/no fillers, good pace
+   1=some fillers OR slightly fast/slow
+   0=many fillers (5+) OR very unnatural pace (<80 or >200 wpm)
+
+7. Confidence (0-1)
+   0=very hesitant, many pauses, weak delivery
+   1=assertive and clear delivery
+
+${combinedContext}
+
+STRICT BENCHMARKS:
+- 4-5: Vague, surface-level, many fillers, no example
+- 6-7: Mostly correct, some depth, average delivery
+- 8-9: Correct + specific example + natural delivery
+- 10: Exceptional content AND excellent delivery
+
+Vary scores — don't give everyone 6.`;
+
+    const scoringRubric =
+      isVoiceMode || isVideoMode ? voiceScoringRubric : textScoringRubric;
+
+    const buildFormalFallback = () =>
+      `${ack} ${transition} ${bankSuggestion || `Tell me about your approach to ${tech} best practices.`}`;
 
     const buildAdviceFallback = () => ({
-      coachFeedback: `You gave a solid answer${firstName ? `, ${firstName}` : ""}. To make it stronger, add a specific example with a measurable outcome — numbers and concrete results make answers much more memorable to interviewers.`,
+      coachFeedback: `You covered the basics. To score higher, add a specific real-world example — mention a project where you applied this and what the outcome was.${isVoiceMode && audioMetrics?.fillerCount > 2 ? ` Also, try to reduce filler words like "${audioMetrics.fillerWords?.[0]}" — they can distract from your message.` : ""}`,
       nextQuestion: `Alright, let's keep going — ${bankSuggestion || `How do you handle errors in ${tech}?`}`,
     });
 
     // ── FORMAL MODE ──────────────────────────────────────────────────────────
     if (interviewStyle === "formal") {
-      const prompt = `You are a senior technical interviewer interviewing ${firstName || "a candidate"} for a ${domain} / ${tech} role.
-${resumeHint}
+      const prompt = `You are a senior technical interviewer for ${domain} / ${tech}.
+${resumeHint}${combinedContext ? combinedContext + "\n" : ""}
 Recent conversation:
 ${historyLines}
 
-Candidate's answer: "${candidateAnswer.slice(0, 300)}"
+Candidate answered: "${candidateAnswer.slice(0, 300)}"
 
-Questions already asked (DO NOT repeat any of these):
+DO NOT repeat:
 ${askedList}
+${bankSuggestion ? `\nSuggested next topic: "${bankSuggestion}"` : ""}
 
-${bankSuggestion ? `Suggested next question topic: "${bankSuggestion}"` : ""}
+${scoringRubric}
 
-Write your next interviewer message. It must:
-1. Start with a short acknowledgment: "${ack}" or similar
-2. Then a natural transition: "${transition}" or similar
-3. End with ONE new interview question (not from the already-asked list)
+Write:
+- interviewerMessage: natural 2-3 sentence reply. Start with "${ack}", then "${transition}", end with ONE new question.
+- internalFeedback: 2-3 sentence honest evaluation for summary page (NOT shown during interview).${isVoiceMode ? " Include 1 note about their voice delivery (pace, fillers, confidence) if relevant." : ""}
 
-Keep it 2-3 sentences. Sound like a real human interviewer — casual, natural.
-Never say "Great answer!" or "Excellent!" — too fake.
-${firstName ? `Occasionally use "${firstName}" naturally.` : ""}
-
-Also rate the answer 1-10 and set decision to "continue", "retry" (vague answer), or "switch" (wrong/blank).
-
-Respond with valid JSON only:
-{"interviewerMessage": "your 2-3 sentence reply ending with a question", "confidenceScore": 7, "decision": "continue"}`;
+JSON only:
+{
+  "interviewerMessage": "ack + transition + question",
+  "internalFeedback": "honest evaluation${isVoiceMode ? " including voice delivery note" : ""}",
+  "confidenceScore": 6,
+  "decision": "continue"
+}`;
 
       const raw = await callGroq(prompt, 0.9);
       const parsed = parseJSON(raw);
-      const msg = parsed?.interviewerMessage?.trim() || buildFormalFallback();
-      console.log(`formal msg: ${msg.slice(0, 100)}`);
 
       return NextResponse.json({
-        interviewerMessage: msg,
+        interviewerMessage:
+          parsed?.interviewerMessage?.trim() || buildFormalFallback(),
         coachFeedback: "",
         nextQuestion: "",
-        confidenceScore: parsed?.confidenceScore || 6,
+        internalFeedback: parsed?.internalFeedback?.trim() || "",
+        confidenceScore: parsed?.confidenceScore || 5,
         decision: parsed?.decision || "continue",
       });
     }
 
     // ── ADVICE MODE ───────────────────────────────────────────────────────────
     if (interviewStyle === "advice") {
-      const prompt = `You are a friendly interview coach helping ${firstName || "a student"} prepare for a ${domain} / ${tech} interview.
-${resumeHint}
-Question asked: "${question.slice(0, 150)}"
-Candidate's answer: "${candidateAnswer.slice(0, 300)}"
+      const prompt = `You are a friendly interview coach for ${domain} / ${tech}.
+${resumeHint}${combinedContext ? combinedContext + "\n" : ""}
+Q: "${question.slice(0, 150)}"
+A: "${candidateAnswer.slice(0, 300)}"
 
-Questions already asked (DO NOT repeat any of these):
+DO NOT repeat:
 ${askedList}
+${bankSuggestion ? `\nSuggested next topic: "${bankSuggestion}"` : ""}
 
-${bankSuggestion ? `Suggested next question topic: "${bankSuggestion}"` : ""}
+${scoringRubric}
 
-Write two things:
+Write:
+1. coachFeedback: 3 sentences. Reference something specific they said. One strength + one concrete improvement.${isVoiceMode ? " If voice metrics show issues (many fillers, bad pace), include a delivery tip." : ""} Use "${firstName || "you"}" naturally. No generic openers.
+2. nextQuestion: natural transition + new question not from the list above.
 
-1. coachFeedback: 3 sentences of specific coaching.
-   - Reference something they actually said
-   - Point out one strength and one concrete improvement
-   - Give a tip: "Next time, try..." or "You could strengthen this by..."
-   - Use their name "${firstName || "you"}" naturally
-   - Do NOT start with "Good answer" or any generic opener
-
-2. nextQuestion: a natural transition + one new question.
-   - Start with "Alright, next —" or "Okay, let's keep going —" or similar
-   - Ask one new question NOT from the already-asked list above
-
-Also rate the answer 1-10 and set decision to "continue", "retry", or "switch".
-
-Respond with valid JSON only:
-{"coachFeedback": "3 sentences of specific feedback", "nextQuestion": "transition + question", "confidenceScore": 7, "decision": "continue"}`;
+JSON only:
+{
+  "coachFeedback": "specific 3-sentence coaching${isVoiceMode ? " with optional voice tip" : ""}",
+  "nextQuestion": "transition + question",
+  "confidenceScore": 6,
+  "decision": "continue"
+}`;
 
       const raw = await callGroq(prompt, 0.88);
       const parsed = parseJSON(raw);
       const fallback = buildAdviceFallback();
 
-      const coachFeedback =
-        parsed?.coachFeedback?.trim() || fallback.coachFeedback;
-      const nextQuestion =
-        parsed?.nextQuestion?.trim() || fallback.nextQuestion;
-
-      console.log(`advice feedback: ${coachFeedback.slice(0, 100)}`);
-      console.log(`advice nextQ: ${nextQuestion.slice(0, 80)}`);
-
       return NextResponse.json({
         interviewerMessage: "",
-        coachFeedback,
-        nextQuestion,
-        confidenceScore: parsed?.confidenceScore || 6,
+        coachFeedback: parsed?.coachFeedback?.trim() || fallback.coachFeedback,
+        nextQuestion: parsed?.nextQuestion?.trim() || fallback.nextQuestion,
+        internalFeedback:
+          parsed?.coachFeedback?.trim() || fallback.coachFeedback,
+        confidenceScore: parsed?.confidenceScore || 5,
         decision: parsed?.decision || "continue",
       });
     }
@@ -261,6 +394,7 @@ Respond with valid JSON only:
       interviewerMessage: "",
       coachFeedback: "",
       nextQuestion: "",
+      internalFeedback: "",
       confidenceScore: 5,
       decision: "continue",
     });
@@ -270,6 +404,7 @@ Respond with valid JSON only:
       interviewerMessage: "",
       coachFeedback: "",
       nextQuestion: "",
+      internalFeedback: "",
       confidenceScore: 5,
       decision: "retry",
     });
