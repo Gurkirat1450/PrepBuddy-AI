@@ -47,7 +47,7 @@ export default function SetupPage() {
     if (preselected) {
       setSessionType(preselected as SessionType);
       sessionStorage.removeItem("prepbuddy_selected_type");
-      setStep("mode");
+      setStep(preselected === "exam" ? "details" : "mode");
     }
   }, []);
 
@@ -96,8 +96,8 @@ export default function SetupPage() {
 
   // Back navigation: details → mode → home (skip type step entirely)
   const goBack = () => {
-    if (step === "details") setStep("mode");
-    else router.push("/");
+    if (step === "details" && sessionType !== "exam") setStep("mode"); else if (step === "details" && sessionType === "exam") router.push("/home");
+    else router.push("/home");
   };
 
   const TYPE_OPTIONS = [
@@ -235,7 +235,7 @@ export default function SetupPage() {
                   key={opt.type}
                   onClick={() => {
                     setSessionType(opt.type);
-                    setStep("mode");
+                    setStep(opt.type === "exam" ? "details" : "mode");
                   }}
                   style={{
                     background:
@@ -306,7 +306,7 @@ export default function SetupPage() {
             >
               {(sessionType === "interview"
                 ? MODE_OPTIONS
-                : [MODE_OPTIONS[0]]
+                : sessionType === "personality" ? MODE_OPTIONS : [MODE_OPTIONS[0]]
               ).map((opt) => (
                 <button
                   key={opt.mode}

@@ -480,7 +480,7 @@ export default function SummaryPage() {
                 <p style={{ color: "#555", fontSize: 13, margin: 0 }}>
                   Analyzing...
                 </p>
-              ) : aiSummary?.strengths?.length > 0 ? (
+              ) : (aiSummary?.strengths?.length ?? 0) > 0 ? (
                 <ul
                   style={{
                     listStyle: "none",
@@ -491,7 +491,7 @@ export default function SummaryPage() {
                     gap: 7,
                   }}
                 >
-                  {aiSummary.strengths.map((s, i) => (
+                  {aiSummary?.strengths?.map((s, i) => (
                     <li
                       key={i}
                       style={{
@@ -522,7 +522,7 @@ export default function SummaryPage() {
               )}
             </div>
 
-            {aiSummary?.improvements?.length > 0 && (
+            {((aiSummary?.improvements?.length ?? 0) > 0) && (
               <div
                 style={{
                   ...card,
@@ -536,7 +536,7 @@ export default function SummaryPage() {
                 <div
                   style={{ display: "flex", flexDirection: "column", gap: 8 }}
                 >
-                  {aiSummary.improvements.map((item, i) => (
+                  {aiSummary?.improvements?.map((item, i) => (
                     <div
                       key={i}
                       style={{
@@ -605,7 +605,7 @@ export default function SummaryPage() {
                       margin: 0,
                     }}
                   >
-                    {toYou(aiSummary!.overallTip)}
+                    {toYou(aiSummary?.overallTip || "")}
                   </p>
                 )}
               </div>
@@ -653,7 +653,7 @@ export default function SummaryPage() {
             New Session
           </button>
           <button
-            onClick={() => router.push("/")}
+            onClick={() => router.push("/home")}
             style={{
               flex: 1,
               padding: "13px",

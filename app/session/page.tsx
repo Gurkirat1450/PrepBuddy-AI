@@ -155,7 +155,7 @@ export default function SessionPage() {
   useEffect(() => {
     const cfg = loadSession();
     if (!cfg) {
-      router.push("/");
+      router.push("/home");
       return;
     }
     setConfig(cfg);
