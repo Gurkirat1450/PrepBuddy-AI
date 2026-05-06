@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { loadSummary, SessionSummary, SessionScore } from "@/lib/session";
 
@@ -313,11 +313,19 @@ export default function SummaryPage() {
   const [summary, setSummary] = useState<SessionSummary | null>(null);
   const [aiSummary, setAiSummary] = useState<AISummary | null>(null);
   const [loadingAI, setLoadingAI] = useState(false);
+  const savedRef = useRef(false);
 
   useEffect(() => {
     const s = loadSummary();
     if (s) {
       setSummary(s);
+      // Save to database
+      fetch("/api/save-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(s),
+      }).catch((e) => console.error("Failed to save session:", e));
+
       if (s.scores.length > 0) {
         setLoadingAI(true);
         fetch("/api/generate-summary", {
@@ -472,7 +480,7 @@ export default function SummaryPage() {
                 <p style={{ color: "#555", fontSize: 13, margin: 0 }}>
                   Analyzing...
                 </p>
-              ) : (aiSummary?.strengths?.length ?? 0) > 0 ? (
+              ) : aiSummary?.strengths?.length > 0 ? (
                 <ul
                   style={{
                     listStyle: "none",
@@ -514,7 +522,7 @@ export default function SummaryPage() {
               )}
             </div>
 
-            {(aiSummary?.improvements?.length ?? 0) > 0 && (
+            {aiSummary?.improvements?.length > 0 && (
               <div
                 style={{
                   ...card,
@@ -597,7 +605,7 @@ export default function SummaryPage() {
                       margin: 0,
                     }}
                   >
-                    {toYou(aiSummary?.overallTip || "")}
+                    {toYou(aiSummary!.overallTip)}
                   </p>
                 )}
               </div>
@@ -612,6 +620,22 @@ export default function SummaryPage() {
         )}
 
         <div style={{ display: "flex", gap: 10 }}>
+          <button
+            onClick={() => router.push("/history")}
+            style={{
+              flex: 1,
+              padding: "13px",
+              background: "transparent",
+              border: "1px solid #2a2a4a",
+              borderRadius: 12,
+              color: "#888",
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            📋 History
+          </button>
           <button
             onClick={() => router.push("/setup")}
             style={{

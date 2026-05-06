@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 
 const MODES = [
   {
